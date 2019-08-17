@@ -4,17 +4,16 @@ Configurable to allow for searches over a certain value.
 """
 import time
 import operator
-from collections import namedtuple
-from typing import Callable, Dict, Union
+from typing import Callable, List, Union, NamedTuple
 
 import pandas
 import requests
 from bs4 import BeautifulSoup
 
-CardOffer = namedtuple('CardOffer', ['card_name', 'card_price'])
+CardOffer = NamedTuple('CardOffer', [('card_name', str), ('card_price', float)])
 
 
-def sanitize_card_text(card_text):
+def sanitize_card_text(card_text: str) -> CardOffer:
     """
     Parses all the text in the card offer to make it cleaner.
     Unfortunately the parsing is quite a bit ugly, and prone to breaking if they were to change XYZ on their site.
@@ -34,7 +33,8 @@ def sanitize_card_text(card_text):
     return CardOffer(card_name=card_dict['"product_name"'], card_price=float(card_dict['"price"'].replace("\"", '')))
 
 
-def find_matching_offers(offers, value, *, comparison=operator.lt):
+def find_matching_offers(offers: List[str], value: float, *,
+                         comparison: Callable[[float, float], bool] = operator.lt) -> List[CardOffer]:
     """
     :param offers: Offers to compare.
     :param value: Value to compare against.
@@ -50,7 +50,7 @@ def find_matching_offers(offers, value, *, comparison=operator.lt):
     return within_price_range
 
 
-def soupify_page(url):
+def soupify_page(url: str):
     """
     Performs a request on a page and then transforms it into a soup document,
     :param url: Url to request.
@@ -61,14 +61,14 @@ def soupify_page(url):
 
 
 def scrape_page(page_number: int, color: str, value: float, rarity: str = 'Common', *,
-                comparison: Callable[[float, float], bool] = operator.lt) -> Union[Dict, None]:
+                comparison: Callable[[float, float], bool] = operator.lt) -> Union[List[CardOffer], None]:
     """
     :param page_number: Results page number.
-    :param color: Card color->red/blue/green/black/white/colorless
+    :param color: Card color->red/blue/green/black/white/colorless.
     :param value: comparison value.
     :param rarity: Card Rarity. Common/Uncommon/Rare/Mythic ...
-    :param comparison:  How to compare card price to the given value. Lt/Gt/EQ
-    :return: None if invalid page_read
+    :param comparison:  How to compare card price to the given value. Lt/Gt/EQ.
+    :return: None if invalid page_read.
     """
     url = 'https://shop.tcgplayer.com/magic/product/show?newSearch=false&Color={color}&Type=Cards&Rarity={rarity}&orientation=list&PageNumber={page}'.format(
         page=page_number, rarity=rarity, color=color)
@@ -77,12 +77,19 @@ def scrape_page(page_number: int, color: str, value: float, rarity: str = 'Commo
     try:
         offers = [card.find('div', class_='product__offers').find('script').get_text() for card in cards]
     except AttributeError:
-        print('Page {url} did not have any offers'.format(url=url))
+        print(f'Page {url} did not have any offers')
         return None
     return find_matching_offers(offers=offers, value=value, comparison=comparison)
 
 
-def main(rarity, color, comparison):
+def main(rarity: str, color: str, comparison: Callable[[float, float], bool]) -> None:
+    """
+    Controls looping logic and writes the output to file.
+    :param rarity: Card Rarity. Common/Uncommon/Rare/Mythic ...
+    :param color: Card color->red/blue/green/black/white/colorless.
+    :param comparison:  How to compare card price to the given value. Lt/Gt/EQ.
+    :return:
+    """
     all_matching_cards = {'names': [],
                           'prices': []
                           }
