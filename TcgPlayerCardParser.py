@@ -4,12 +4,14 @@ Configurable to allow for searches over a certain value.
 """
 import time
 import operator
+from collections import namedtuple
 from typing import Callable, Dict, Union
 
 import pandas
 import requests
 from bs4 import BeautifulSoup
 
+CardOffer = namedtuple('CardOffer', ['card_name', 'card_price'])
 
 
 def sanitize_card_text(card_text):
@@ -29,32 +31,31 @@ def sanitize_card_text(card_text):
         if len(key_val) != 2:
             raise RuntimeError("Invalid Split Occured")
         card_dict[key_val[0].replace(" ", '').replace('\r\n', '')] = key_val[1]
-    return card_dict
+    return CardOffer(card_name=card_dict['"product_name"'], card_price=float(card_dict['"price"'].replace("\"", '')))
 
 
 def find_matching_offers(offers, value, *, comparison=operator.lt):
     """
-
-    :param offers:
-    :param value:
-    :param comparison:
-    :return:
+    :param offers: Offers to compare.
+    :param value: Value to compare against.
+    :param comparison: Comparison function.
+    :return: Return all offers that compare truthfully
     """
-    within_price_range = {'names': [],
-                          'prices': []
-                          }
+    within_price_range = []
     for offer in offers:
-        card_name = sanitize_card_text(offer)['"product_name"']
-        price = sanitize_card_text(offer)['"price"']
-        price_numeric = float(price.replace("\"", ''))
-        if comparison(price_numeric, value):
-            print(card_name, price_numeric)
-            within_price_range['names'].append(card_name.replace('\"', ''))
-            within_price_range['prices'].append(price_numeric)
+        card_offer = sanitize_card_text(offer)
+        if comparison(card_offer.card_price, value):
+            print(card_offer.card_name, card_offer.card_price)
+            within_price_range.append(card_offer)
     return within_price_range
 
 
 def soupify_page(url):
+    """
+    Performs a request on a page and then transforms it into a soup document,
+    :param url: Url to request.
+    :return: Soup document.
+    """
     retrieved_page = requests.get(url)
     return BeautifulSoup(retrieved_page.content, 'html.parser')
 
@@ -73,22 +74,19 @@ def scrape_page(page_number: int, color: str, value: float, rarity: str = 'Commo
         page=page_number, rarity=rarity, color=color)
     soup = soupify_page(url)
     cards = soup.find_all('div', class_="product")
-    # try:
-    offers = [card.find('div', class_='product__offers').find('script').get_text() for card in cards]
+    try:
+        offers = [card.find('div', class_='product__offers').find('script').get_text() for card in cards]
+    except AttributeError:
+        print('Page {url} did not have any offers'.format(url=url))
+        return None
     return find_matching_offers(offers=offers, value=value, comparison=comparison)
-    # except Exception as err:
-    #     print('Page {url} did not have any offers'.format(url=url))
-    #     return None
 
 
-if __name__ == '__main__':
-    rarity = 'Common'
-    color = 'Green'
-    comparison = operator.lt # must take two float values
+def main(rarity, color, comparison):
     all_matching_cards = {'names': [],
                           'prices': []
                           }
-    for page_number in range(1001):  # Tcgplayer page breaks on page 1000
+    for page_number in range(1000):  # Tcgplayer page breaks on page 1000
         scraped_page = scrape_page(page_number=page_number, color=color, value=0.06, rarity=rarity,
                                    comparison=comparison)
         if scraped_page is None:
@@ -98,9 +96,15 @@ if __name__ == '__main__':
             if scraped_page is None:
                 print("Multiple requests to page failed. Saving retrieved results to file and terminating.")
                 break
-        for name in scraped_page['names']:
-            all_matching_cards['names'].append(name)
-        for price in scraped_page['prices']:
-            all_matching_cards['prices'].append(price)
+        for offer in scraped_page:
+            all_matching_cards['names'].append(offer.card_name)
+            all_matching_cards['prices'].append(offer.card_price)
     all_matching_cards_df = pandas.DataFrame(all_matching_cards)
     all_matching_cards_df.to_csv(f'./foundcards_{color}_{rarity}.csv')
+
+
+if __name__ == '__main__':
+    RARITY = 'Common'
+    COLOR = 'Green'
+    COMPARISON = operator.lt  # must take two float values
+    main(rarity=RARITY, color=COLOR, comparison=COMPARISON)
