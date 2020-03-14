@@ -82,7 +82,8 @@ def main(rarity: str, color: str, value: float, comparison: Callable[[float, flo
     :return:
     """
     all_matching_cards = set()
-    rs = (grequests.get(get_request_url(page_num, rarity, color)) for page_num in range(1000))
+    # tcgplayer fails after page 1000
+    rs = (grequests.get(get_request_url(page_num, rarity, color)) for page_num in range(1, 1001))
     responses = grequests.map(rs)
     print('Recieved responses')
     successful_responses = [response for response in responses if response.status_code == 200]
@@ -92,7 +93,7 @@ def main(rarity: str, color: str, value: float, comparison: Callable[[float, flo
         for listy in data:
             if listy:
                 for offer in listy:
-                    all_matching_cards.add(offer.card_name.replace(' ', '').replace('\"', ''))
+                    all_matching_cards.add(offer.card_name.strip().replace('\"', ''))
 
     all_matching_cards_df = pandas.DataFrame({"names": list(all_matching_cards)})
     all_matching_cards_df.to_csv(f'./foundcards_{color}_{rarity}.csv')
