@@ -2,12 +2,13 @@
 Parses TCGPlayer for cards under a certain value.
 Configurable to allow for searches over a certain value.
 """
-import time
+from multiprocessing import Pool, cpu_count
+from functools import partial
 import operator
 from typing import Callable, List, Union, NamedTuple
 
 import pandas
-import requests
+import grequests
 from bs4 import BeautifulSoup
 
 CardOffer = NamedTuple('CardOffer', [('card_name', str), ('card_price', float)])
@@ -16,7 +17,7 @@ CardOffer = NamedTuple('CardOffer', [('card_name', str), ('card_price', float)])
 def sanitize_card_text(card_text: str) -> CardOffer:
     """
     Parses all the text in the card offer to make it cleaner.
-    Unfortunately the parsing is quite a bit ugly, and prone to breaking if they were to change XYZ on their site.
+    Unfortunately the parsing is quite a bit ugly, and prone to breaking if they were to change anything on their site.
     :param card_text: Card Offer Text
     :return: Dict{"product_name":card_name,}
     """
@@ -45,68 +46,55 @@ def find_matching_offers(offers: List[str], value: float, *,
     for offer in offers:
         card_offer = sanitize_card_text(offer)
         if comparison(card_offer.card_price, value):
-            print(card_offer.card_name, card_offer.card_price)
             within_price_range.append(card_offer)
     return within_price_range
 
 
-def soupify_page(url: str):
-    """
-    Performs a request on a page and then transforms it into a soup document,
-    :param url: Url to request.
-    :return: Soup document.
-    """
-    retrieved_page = requests.get(url)
-    return BeautifulSoup(retrieved_page.content, 'html.parser')
+def get_request_url(page_number, rarity, color):
+    return 'https://shop.tcgplayer.com/magic/product/show?newSearch=false&Color={color}&Type=Cards&Rarity={rarity}&orientation=list&PageNumber={page}'.format(
+        page=page_number, rarity=rarity, color=color)
 
 
-def scrape_page(page_number: int, color: str, value: float, rarity: str = 'Common', *,
+def scrape_page(retrieved_page, value, *,
                 comparison: Callable[[float, float], bool] = operator.lt) -> Union[List[CardOffer], None]:
     """
-    :param page_number: Results page number.
-    :param color: Card color->red/blue/green/black/white/colorless.
+    :param retrieved_page: Http response page.
     :param value: comparison value.
-    :param rarity: Card Rarity. Common/Uncommon/Rare/Mythic ...
     :param comparison:  How to compare card price to the given value. Lt/Gt/EQ.
     :return: None if invalid page_read.
     """
-    url = 'https://shop.tcgplayer.com/magic/product/show?newSearch=false&Color={color}&Type=Cards&Rarity={rarity}&orientation=list&PageNumber={page}'.format(
-        page=page_number, rarity=rarity, color=color)
-    soup = soupify_page(url)
+    soup = BeautifulSoup(retrieved_page.content, 'html.parser')
     cards = soup.find_all('div', class_="product")
     try:
         offers = [card.find('div', class_='product__offers').find('script').get_text() for card in cards]
     except AttributeError:
-        print(f'Page {url} did not have any offers')
         return None
     return find_matching_offers(offers=offers, value=value, comparison=comparison)
 
 
-def main(rarity: str, color: str, comparison: Callable[[float, float], bool]) -> None:
+def main(rarity: str, color: str, value: float, comparison: Callable[[float, float], bool]) -> None:
     """
     Controls looping logic and writes the output to file.
     :param rarity: Card Rarity. Common/Uncommon/Rare/Mythic ...
     :param color: Card color->red/blue/green/black/white/colorless.
+    :param value: Dollar value to compare to.
     :param comparison:  How to compare card price to the given value. Lt/Gt/EQ.
     :return:
     """
-    all_matching_cards = {'names': [],
-                          'prices': []
-                          }
-    for page_number in range(1000):  # Tcgplayer page breaks on page 1000
-        scraped_page = scrape_page(page_number=page_number, color=color, value=0.06, rarity=rarity,
-                                   comparison=comparison)
-        if scraped_page is None:
-            time.sleep(3)  # Retry once
-            scraped_page = scrape_page(page_number=page_number, color=color, value=0.06, rarity=rarity,
-                                       comparison=comparison)
-            if scraped_page is None:
-                print("Multiple requests to page failed. Saving retrieved results to file and terminating.")
-                break
-        for offer in scraped_page:
-            all_matching_cards['names'].append(offer.card_name)
-            all_matching_cards['prices'].append(offer.card_price)
-    all_matching_cards_df = pandas.DataFrame(all_matching_cards)
+    all_matching_cards = set()
+    rs = (grequests.get(get_request_url(page_num, rarity, color)) for page_num in range(1000))
+    responses = grequests.map(rs)
+    print('Recieved responses')
+    successful_responses = [response for response in responses if response.status_code == 200]
+    scraper = partial(scrape_page, value=value, comparison=comparison)
+    with Pool(processes=cpu_count() - 1) as pool:
+        data = pool.map(scraper, successful_responses)
+        for listy in data:
+            if listy:
+                for offer in listy:
+                    all_matching_cards.add(offer.card_name.replace(' ', '').replace('\"', ''))
+
+    all_matching_cards_df = pandas.DataFrame({"names": list(all_matching_cards)})
     all_matching_cards_df.to_csv(f'./foundcards_{color}_{rarity}.csv')
 
 
@@ -114,4 +102,7 @@ if __name__ == '__main__':
     RARITY = 'Common'
     COLOR = 'Green'
     COMPARISON = operator.lt  # must take two float values
-    main(rarity=RARITY, color=COLOR, comparison=COMPARISON)
+    import time
+    start = time.time()
+    main(rarity=RARITY, color=COLOR, value=0.06, comparison=COMPARISON)
+    print(time.time() - start)
