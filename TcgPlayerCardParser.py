@@ -2,6 +2,7 @@
 Parses TCGPlayer for cards under a certain value.
 Configurable to allow for searches over a certain value.
 """
+import os
 from multiprocessing import Pool, cpu_count
 from functools import partial
 import operator
@@ -96,7 +97,8 @@ def main(rarity: str, color: str, value: float, comparison: Callable[[float, flo
                     all_matching_cards.add(offer.card_name.strip().replace('\"', ''))
 
     all_matching_cards_df = pandas.DataFrame({"names": list(all_matching_cards)})
-    all_matching_cards_df.to_csv(f'./foundcards_{color}_{rarity}.csv')
+    save_path = os.path.join(os.path.curdir, f'foundcards_{color}_{rarity}.csv')
+    all_matching_cards_df.to_csv(save_path)
 
 
 if __name__ == '__main__':
